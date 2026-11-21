@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   UserCircle,
   LogIn,
@@ -19,6 +19,35 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
+function pickText(value, fallback = '') {
+  if (!value) return fallback;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object') {
+    return (
+      value.en ||
+      value.fr ||
+      value.ar ||
+      Object.values(value).find((v) => typeof v === 'string') ||
+      fallback
+    );
+  }
+  return String(value);
+}
+
+function parseListInput(raw) {
+  if (Array.isArray(raw)) return raw;
+  if (!raw) return [];
+  return String(raw)
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function formatListInput(arr) {
+  if (!Array.isArray(arr)) return arr ? String(arr) : '';
+  return arr.join('\n');
+}
+
 export default function AccountSection() {
   const {
     t,
@@ -26,10 +55,10 @@ export default function AccountSection() {
     isAdmin,
     setIsLoginModalOpen,
     logout,
-    users,
-    news,
-    clubs,
-    clubRequests,
+    users = [],
+    news = [],
+    clubs = [],
+    clubRequests = [],
     addUserAccount,
     updateUserAccount,
     changeUserPassword,
@@ -43,26 +72,59 @@ export default function AccountSection() {
     decideClubJoinRequest,
   } = useApp();
 
-  const [adminTab, setAdminTab] = useState('news');
+  const isClubAdmin = currentUser?.role === 'club_admin';
+  const userManagedClubId = currentUser?.managedClubId ?? currentUser?.managed_club_id ?? '';
 
-  // حالة نموذج الأخبار
+  const managedClubs = useMemo(() => {
+    if (isAdmin) return clubs;
+    if (isClubAdmin) {
+      if (!userManagedClubId) return clubs;
+      return clubs.filter((c) => String(c.id) === String(userManagedClubId));
+    }
+    return [];
+  }, [isAdmin, isClubAdmin, userManagedClubId, clubs]);
+
+  const managedClubIdsSet = useMemo(
+    () => new Set(managedClubs.map((c) => String(c.id))),
+    [managedClubs]
+  );
+
+  const visibleRequests = useMemo(() => {
+    if (isAdmin) return clubRequests;
+    if (isClubAdmin) {
+      return clubRequests.filter(
+        (req) => !req.clubId || managedClubIdsSet.has(String(req.clubId))
+      );
+    }
+    return [];
+  }, [isAdmin, isClubAdmin, clubRequests, managedClubIdsSet]);
+
+  const hasControlCenter = isAdmin || (isClubAdmin && managedClubs.length > 0);
+
+  const [activeTab, setActiveTab] = useState(isAdmin ? 'news' : 'clubs');
+
+  // حالة نموذج الأخبار (للأدمن)
   const [editingNewsId, setEditingNewsId] = useState(null);
   const [newsForm, setNewsForm] = useState({
     title: '',
     content: '',
     date: new Date().toISOString().slice(0, 10),
-    author: 'Admin FSTBM',
+    author: currentUser?.fullName || 'Admin FSTBM',
   });
 
-  // حالة نموذج الأندية
+  // حالة نموذج الأندية الكامل (للأدمن ومسؤول النادي)
   const [editingClubId, setEditingClubId] = useState(null);
   const [clubForm, setClubForm] = useState({
     name: '',
     description: '',
-    leader: 'Admin FSTBM',
+    leader: currentUser?.fullName || '',
+    membersText: '',
+    eventsText: '',
+    announcementsText: '',
+    photosText: '',
   });
 
-  // حالة نموذج إضافة مستخدم جديد
+  // حالة نموذج إضافة مستخدم جديد (للأدمن)
   const [newUserForm, setNewUserForm] = useState({
     username: '',
     password: '',
@@ -72,9 +134,10 @@ export default function AccountSection() {
     apogee: '',
     filiere: 'MIP',
     groupName: 'G1',
+    managedClubId: '',
   });
 
-  // حالة تعديل المستخدمين وكلمات المرور
+  // حالة تعديل المستخدمين وكلمات المرور (للأدمن)
   const [userDrafts, setUserDrafts] = useState({});
 
   if (!currentUser) {
@@ -101,12 +164,12 @@ export default function AccountSection() {
 
   function handleSaveNews(e) {
     e.preventDefault();
-    if (!newsForm.title.trim() || !newsForm.content.trim()) return;
+    if (!isAdmin || !newsForm.title.trim() || !newsForm.content.trim()) return;
     if (editingNewsId) {
-      updateNewsItem(editingNewsId, newsForm);
+      updateNewsItem?.(editingNewsId, newsForm);
       setEditingNewsId(null);
     } else {
-      addNewsItem(newsForm);
+      addNewsItem?.(newsForm);
     }
     setNewsForm({
       title: '',
@@ -119,35 +182,70 @@ export default function AccountSection() {
   function startEditNews(item) {
     setEditingNewsId(item.id);
     setNewsForm({
-      title: item.title || '',
-      content: item.content || '',
+      title: pickText(item.title, ''),
+      content: pickText(item.content ?? item.summary, ''),
       date: item.date || new Date().toISOString().slice(0, 10),
       author: item.author || 'Admin FSTBM',
+    });
+  }
+
+  function canEditClub(clubId) {
+    if (isAdmin) return true;
+    if (isClubAdmin) {
+      if (!userManagedClubId) return true;
+      return String(userManagedClubId) === String(clubId);
+    }
+    return false;
+  }
+
+  function resetClubForm() {
+    setEditingClubId(null);
+    setClubForm({
+      name: '',
+      description: '',
+      leader: currentUser.fullName || '',
+      membersText: '',
+      eventsText: '',
+      announcementsText: '',
+      photosText: '',
     });
   }
 
   function handleSaveClub(e) {
     e.preventDefault();
     if (!clubForm.name.trim()) return;
+
+    const payload = {
+      name: clubForm.name.trim(),
+      description: clubForm.description.trim(),
+      leader: clubForm.leader.trim(),
+      members: parseListInput(clubForm.membersText),
+      events: parseListInput(clubForm.eventsText),
+      announcements: parseListInput(clubForm.announcementsText),
+      photos: parseListInput(clubForm.photosText),
+    };
+
     if (editingClubId) {
-      updateClubItem(editingClubId, clubForm);
-      setEditingClubId(null);
-    } else {
-      addClubItem(clubForm);
+      if (!canEditClub(editingClubId)) return;
+      updateClubItem?.(editingClubId, payload);
+      resetClubForm();
+    } else if (isAdmin) {
+      addClubItem?.(payload);
+      resetClubForm();
     }
-    setClubForm({
-      name: '',
-      description: '',
-      leader: currentUser.fullName || 'Admin FSTBM',
-    });
   }
 
   function startEditClub(club) {
+    if (!canEditClub(club.id)) return;
     setEditingClubId(club.id);
     setClubForm({
-      name: club.name || '',
-      description: club.description || '',
-      leader: club.leader || 'Admin FSTBM',
+      name: pickText(club.name, ''),
+      description: pickText(club.description, ''),
+      leader: club.leader || currentUser.fullName || '',
+      membersText: formatListInput(club.members),
+      eventsText: formatListInput(club.events),
+      announcementsText: formatListInput(club.announcements),
+      photosText: formatListInput(club.photos),
     });
   }
 
@@ -161,6 +259,7 @@ export default function AccountSection() {
         filiere: u.filiere || '',
         groupName: u.groupName || '',
         password: u.password || '',
+        managedClubId: u.managedClubId ?? u.managed_club_id ?? '',
       }
     );
   }
@@ -177,8 +276,9 @@ export default function AccountSection() {
   }
 
   function handleSaveUser(u) {
+    if (!isAdmin) return;
     const draft = getDraftForUser(u);
-    updateUserAccount(u.id, {
+    updateUserAccount?.(u.id, {
       fullName: draft.fullName,
       username: draft.username,
       role: draft.role,
@@ -186,18 +286,22 @@ export default function AccountSection() {
       filiere: draft.filiere,
       groupName: draft.groupName,
       password: draft.password,
+      managedClubId: draft.managedClubId || null,
+      managed_club_id: draft.managedClubId || null,
     });
     if (draft.password) {
-      changeUserPassword(u.id, draft.password);
+      changeUserPassword?.(u.id, draft.password);
     }
   }
 
   function handleCreateUser(e) {
     e.preventDefault();
-    if (!newUserForm.username.trim() || !newUserForm.password.trim()) return;
-    addUserAccount({
+    if (!isAdmin || !newUserForm.username.trim() || !newUserForm.password.trim()) return;
+    addUserAccount?.({
       ...newUserForm,
       fullName: newUserForm.fullName.trim() || newUserForm.username.trim(),
+      managedClubId: newUserForm.managedClubId || null,
+      managed_club_id: newUserForm.managedClubId || null,
     });
     setNewUserForm({
       username: '',
@@ -208,6 +312,7 @@ export default function AccountSection() {
       apogee: '',
       filiere: 'MIP',
       groupName: 'G1',
+      managedClubId: '',
     });
   }
 
@@ -279,72 +384,80 @@ export default function AccountSection() {
         </div>
       </div>
 
-      {isAdmin && (
+      {hasControlCenter && (
         <div className="space-y-5 rounded-2xl border border-slate-200 bg-white p-6 shadow-xs">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
             <div>
-              <h2 className="text-lg font-bold text-slate-900">Admin Control Center</h2>
+              <h2 className="text-lg font-bold text-slate-900">
+                {isAdmin ? 'Admin Control Center' : 'Club Admin Center'}
+              </h2>
               <p className="text-xs text-slate-500">
-                Manage news, club names & requests, and all accounts/passwords (admin, profs, students).
+                {isAdmin
+                  ? 'Manage news, clubs, club join requests, and accounts/passwords.'
+                  : 'Edit everything about your club and accept or deny join requests.'}
               </p>
             </div>
 
             <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => setAdminTab('news')}
-                className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-semibold ${
-                  adminTab === 'news'
-                    ? 'bg-emerald-700 text-white'
-                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                }`}
-              >
-                <Newspaper className="h-4 w-4" />
-                News ({news.length})
-              </button>
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('news')}
+                  className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-semibold ${
+                    activeTab === 'news'
+                      ? 'bg-emerald-700 text-white'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  <Newspaper className="h-4 w-4" />
+                  News ({news.length})
+                </button>
+              )}
 
               <button
                 type="button"
-                onClick={() => setAdminTab('clubs')}
+                onClick={() => setActiveTab('clubs')}
                 className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-semibold ${
-                  adminTab === 'clubs'
+                  activeTab === 'clubs'
                     ? 'bg-emerald-700 text-white'
                     : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                 }`}
               >
                 <Users className="h-4 w-4" />
-                Clubs ({clubs.length})
+                Clubs ({managedClubs.length})
               </button>
 
               <button
                 type="button"
-                onClick={() => setAdminTab('requests')}
+                onClick={() => setActiveTab('requests')}
                 className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-semibold ${
-                  adminTab === 'requests'
+                  activeTab === 'requests'
                     ? 'bg-emerald-700 text-white'
                     : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                 }`}
               >
                 <UserCheck className="h-4 w-4" />
-                Club Requests ({clubRequests.length})
+                Club Requests ({visibleRequests.length})
               </button>
 
-              <button
-                type="button"
-                onClick={() => setAdminTab('users')}
-                className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-semibold ${
-                  adminTab === 'users'
-                    ? 'bg-emerald-700 text-white'
-                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                }`}
-              >
-                <KeyRound className="h-4 w-4" />
-                Users & Passwords ({users.length})
-              </button>
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('users')}
+                  className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-semibold ${
+                    activeTab === 'users'
+                      ? 'bg-emerald-700 text-white'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  <KeyRound className="h-4 w-4" />
+                  Users & Passwords ({users.length})
+                </button>
+              )}
             </div>
           </div>
 
-          {adminTab === 'news' && (
+          {isAdmin && activeTab === 'news' && (
             <div className="space-y-4">
               <form onSubmit={handleSaveNews} className="grid gap-3 rounded-xl bg-slate-50 p-4 md:grid-cols-2">
                 <input
@@ -399,14 +512,18 @@ export default function AccountSection() {
               </form>
 
               <div className="space-y-2">
-                {news.map((item) => (
+                {news.map((item, idx) => (
                   <div
-                    key={item.id}
+                    key={item.id ?? idx}
                     className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 p-3.5"
                   >
                     <div>
-                      <div className="text-sm font-bold text-slate-900">{item.title}</div>
-                      <div className="text-xs text-slate-600">{item.content}</div>
+                      <div className="text-sm font-bold text-slate-900">
+                        {pickText(item.title)}
+                      </div>
+                      <div className="text-xs text-slate-600">
+                        {pickText(item.content ?? item.summary)}
+                      </div>
                       <div className="mt-1 text-[11px] text-slate-400">
                         {item.date} • {item.author}
                       </div>
@@ -422,7 +539,7 @@ export default function AccountSection() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => deleteNewsItem(item.id)}
+                        onClick={() => deleteNewsItem?.(item.id)}
                         className="inline-flex items-center gap-1 rounded-lg bg-rose-50 px-2.5 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
@@ -435,111 +552,156 @@ export default function AccountSection() {
             </div>
           )}
 
-          {adminTab === 'clubs' && (
+          {activeTab === 'clubs' && (
             <div className="space-y-4">
-              <form onSubmit={handleSaveClub} className="grid gap-3 rounded-xl bg-slate-50 p-4 md:grid-cols-3">
-                <input
-                  type="text"
-                  placeholder="Club name"
-                  value={clubForm.name}
-                  onChange={(e) => setClubForm((p) => ({ ...p, name: e.target.value }))}
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                  required
-                />
-                <input
-                  type="text"
-                  placeholder="Club leader"
-                  value={clubForm.leader}
-                  onChange={(e) => setClubForm((p) => ({ ...p, leader: e.target.value }))}
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                />
-                <input
-                  type="text"
-                  placeholder="Club description"
-                  value={clubForm.description}
-                  onChange={(e) => setClubForm((p) => ({ ...p, description: e.target.value }))}
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                />
-                <div className="flex items-center gap-2 md:col-span-3">
-                  <button
-                    type="submit"
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-700 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-800"
-                  >
-                    <Plus className="h-4 w-4" />
-                    {editingClubId ? 'Update Club' : 'Add Club'}
-                  </button>
-                  {editingClubId && (
+              {(isAdmin || editingClubId) && (
+                <form
+                  onSubmit={handleSaveClub}
+                  className="grid gap-3 rounded-xl bg-slate-50 p-4 md:grid-cols-2"
+                >
+                  <input
+                    type="text"
+                    placeholder="Club name"
+                    value={clubForm.name}
+                    onChange={(e) => setClubForm((p) => ({ ...p, name: e.target.value }))}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                    required
+                  />
+                  <input
+                    type="text"
+                    placeholder="Club leader"
+                    value={clubForm.leader}
+                    onChange={(e) => setClubForm((p) => ({ ...p, leader: e.target.value }))}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                  />
+                  <textarea
+                    placeholder="Club description"
+                    value={clubForm.description}
+                    onChange={(e) => setClubForm((p) => ({ ...p, description: e.target.value }))}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm md:col-span-2"
+                    rows={2}
+                  />
+                  <textarea
+                    placeholder="Members (one per line)"
+                    value={clubForm.membersText}
+                    onChange={(e) => setClubForm((p) => ({ ...p, membersText: e.target.value }))}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs"
+                    rows={2}
+                  />
+                  <textarea
+                    placeholder="Events (one per line)"
+                    value={clubForm.eventsText}
+                    onChange={(e) => setClubForm((p) => ({ ...p, eventsText: e.target.value }))}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs"
+                    rows={2}
+                  />
+                  <textarea
+                    placeholder="Announcements (one per line)"
+                    value={clubForm.announcementsText}
+                    onChange={(e) =>
+                      setClubForm((p) => ({ ...p, announcementsText: e.target.value }))
+                    }
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs"
+                    rows={2}
+                  />
+                  <textarea
+                    placeholder="Photo URLs (one per line)"
+                    value={clubForm.photosText}
+                    onChange={(e) => setClubForm((p) => ({ ...p, photosText: e.target.value }))}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs"
+                    rows={2}
+                  />
+                  <div className="flex items-center gap-2 md:col-span-2">
                     <button
-                      type="button"
-                      onClick={() => {
-                        setEditingClubId(null);
-                        setClubForm({
-                          name: '',
-                          description: '',
-                          leader: currentUser.fullName || 'Admin FSTBM',
-                        });
-                      }}
-                      className="rounded-xl bg-slate-200 px-3 py-2 text-xs font-semibold text-slate-700"
+                      type="submit"
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-700 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-800"
                     >
-                      Cancel
+                      <Plus className="h-4 w-4" />
+                      {editingClubId ? 'Save All Club Changes' : 'Add Club'}
                     </button>
-                  )}
-                </div>
-              </form>
+                    {editingClubId && (
+                      <button
+                        type="button"
+                        onClick={resetClubForm}
+                        className="rounded-xl bg-slate-200 px-3 py-2 text-xs font-semibold text-slate-700"
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </div>
+                </form>
+              )}
 
               <div className="space-y-2">
-                {clubs.map((club) => (
+                {managedClubs.map((club, idx) => (
                   <div
-                    key={club.id}
-                    className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 p-3.5"
-                  >
-                    <div>
-                      <div className="text-sm font-bold text-slate-900">{club.name}</div>
-                      <div className="text-xs text-slate-600">{club.description}</div>
-                      <div className="mt-1 text-[11px] text-slate-400">Leader: {club.leader}</div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => startEditClub(club)}
-                        className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-200"
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                        Edit Name & Info
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => deleteClubItem(club.id)}
-                        className="inline-flex items-center gap-1 rounded-lg bg-rose-50 px-2.5 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {adminTab === 'requests' && (
-            <div className="space-y-2.5">
-              {clubRequests.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-xs text-slate-500">
-                  No club join requests yet.
-                </div>
-              ) : (
-                clubRequests.map((req) => (
-                  <div
-                    key={req.id}
+                    key={club.id ?? idx}
                     className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 p-3.5"
                   >
                     <div>
                       <div className="text-sm font-bold text-slate-900">
-                        {req.requesterName} → {req.clubName}
+                        {pickText(club.name)}
                       </div>
                       <div className="text-xs text-slate-600">
-                        {req.requesterEmail || req.requesterUsername || req.requesterRole}
+                        {pickText(club.description)}
+                      </div>
+                      <div className="mt-1 text-[11px] text-slate-400">
+                        Leader: {club.leader || '—'}
+                        {Array.isArray(club.members) ? ` • ${club.members.length} members` : ''}
+                        {Array.isArray(club.events) ? ` • ${club.events.length} events` : ''}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {canEditClub(club.id) && (
+                        <button
+                          type="button"
+                          onClick={() => startEditClub(club)}
+                          className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-200"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                          Edit Everything
+                        </button>
+                      )}
+                      {isAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => deleteClubItem?.(club.id)}
+                          className="inline-flex items-center gap-1 rounded-lg bg-rose-50 px-2.5 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          Delete
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'requests' && (
+            <div className="space-y-2.5">
+              {visibleRequests.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-xs text-slate-500">
+                  No club join requests yet.
+                </div>
+              ) : (
+                visibleRequests.map((req, idx) => (
+                  <div
+                    key={req.id ?? idx}
+                    className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 p-3.5"
+                  >
+                    <div>
+                      <div className="text-sm font-bold text-slate-900">
+                        {req.requesterName || req.requester_name} → {req.clubName || req.club_name}
+                      </div>
+                      <div className="text-xs text-slate-600">
+                        {req.requesterEmail ||
+                          req.requester_email ||
+                          req.requesterUsername ||
+                          req.requester_username ||
+                          req.requesterRole ||
+                          req.requester_role}
                         {req.note ? ` • ${req.note}` : ''}
                       </div>
                       <span
@@ -558,7 +720,7 @@ export default function AccountSection() {
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
-                        onClick={() => decideClubJoinRequest(req.id, 'approved')}
+                        onClick={() => decideClubJoinRequest?.(req.id, 'approved')}
                         className="inline-flex items-center gap-1 rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-800"
                       >
                         <Check className="h-3.5 w-3.5" />
@@ -566,7 +728,7 @@ export default function AccountSection() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => decideClubJoinRequest(req.id, 'rejected')}
+                        onClick={() => decideClubJoinRequest?.(req.id, 'rejected')}
                         className="inline-flex items-center gap-1 rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700"
                       >
                         <X className="h-3.5 w-3.5" />
@@ -579,9 +741,9 @@ export default function AccountSection() {
             </div>
           )}
 
-          {adminTab === 'users' && (
+          {isAdmin && activeTab === 'users' && (
             <div className="space-y-4">
-              <form onSubmit={handleCreateUser} className="grid gap-2.5 rounded-xl bg-slate-50 p-4 md:grid-cols-4">
+              <form onSubmit={handleCreateUser} className="grid gap-2.5 rounded-xl bg-slate-50 p-4 md:grid-cols-5">
                 <input
                   type="text"
                   placeholder="Full name"
@@ -611,10 +773,23 @@ export default function AccountSection() {
                   className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs"
                 >
                   <option value="admin">admin</option>
+                  <option value="club_admin">club_admin</option>
                   <option value="prof">prof</option>
                   <option value="student">student</option>
                 </select>
-                <div className="md:col-span-4">
+                <select
+                  value={newUserForm.managedClubId}
+                  onChange={(e) => setNewUserForm((p) => ({ ...p, managedClubId: e.target.value }))}
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs"
+                >
+                  <option value="">Club (if club_admin)</option>
+                  {clubs.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {pickText(c.name, c.id)}
+                    </option>
+                  ))}
+                </select>
+                <div className="md:col-span-5">
                   <button
                     type="submit"
                     className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-700 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-800"
@@ -626,12 +801,12 @@ export default function AccountSection() {
               </form>
 
               <div className="space-y-2.5">
-                {users.map((u) => {
+                {users.map((u, idx) => {
                   const draft = getDraftForUser(u);
                   return (
                     <div
-                      key={u.id}
-                      className="grid gap-2 rounded-xl border border-slate-200 p-3.5 md:grid-cols-6 md:items-center"
+                      key={u.id ?? idx}
+                      className="grid gap-2 rounded-xl border border-slate-200 p-3.5 md:grid-cols-7 md:items-center"
                     >
                       <input
                         type="text"
@@ -653,8 +828,21 @@ export default function AccountSection() {
                         className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs"
                       >
                         <option value="admin">admin</option>
+                        <option value="club_admin">club_admin</option>
                         <option value="prof">prof</option>
                         <option value="student">student</option>
+                      </select>
+                      <select
+                        value={draft.managedClubId}
+                        onChange={(e) => setDraftField(u, 'managedClubId', e.target.value)}
+                        className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs"
+                      >
+                        <option value="">No club</option>
+                        {clubs.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {pickText(c.name, c.id)}
+                          </option>
+                        ))}
                       </select>
                       <input
                         type="text"
@@ -672,7 +860,7 @@ export default function AccountSection() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => deleteUserAccount(u.id)}
+                        onClick={() => deleteUserAccount?.(u.id)}
                         className="rounded-lg bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100"
                       >
                         Delete

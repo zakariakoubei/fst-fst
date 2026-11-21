@@ -29,6 +29,7 @@ const FALLBACK_USERS = [
     apogee: 'ADM-001',
     filiere: 'Administration',
     groupName: 'Staff',
+    managedClubId: '',
     status: 'active',
   },
   {
@@ -41,6 +42,7 @@ const FALLBACK_USERS = [
     apogee: 'PRF-101',
     filiere: 'MIP',
     groupName: 'G1',
+    managedClubId: '',
     status: 'active',
   },
   {
@@ -53,6 +55,7 @@ const FALLBACK_USERS = [
     apogee: '22004819',
     filiere: 'MIP',
     groupName: 'G1',
+    managedClubId: '',
     status: 'active',
   },
 ];
@@ -133,6 +136,7 @@ function mapDbUser(row) {
     apogee: row.apogee || '',
     filiere: row.filiere || '',
     groupName: row.group_name || row.groupName || '',
+    managedClubId: row.managed_club_id || row.managedClubId || '',
     status: row.status || 'active',
   };
 }
@@ -143,6 +147,10 @@ function mapDbClub(row) {
     name: row.name,
     description: row.description || '',
     leader: row.leader || 'Admin FSTBM',
+    members: Array.isArray(row.members) ? row.members : [],
+    events: Array.isArray(row.events) ? row.events : [],
+    announcements: Array.isArray(row.announcements) ? row.announcements : [],
+    photos: Array.isArray(row.photos) ? row.photos : [],
   };
 }
 
@@ -168,6 +176,19 @@ function mapDbRequest(row) {
     note: row.note || '',
     status: row.status || 'pending',
     createdAt: row.created_at,
+  };
+}
+
+function mapDbTimetable(row) {
+  return {
+    id: row.id,
+    day: row.day || 'Monday',
+    time: row.time || '08:30 - 10:15',
+    moduleCode: row.module_code || row.moduleCode || 'INF301',
+    sessionType: row.session_type || row.sessionType || 'Cours',
+    room: row.room || '',
+    group: row.group_name || row.group || '',
+    instructor: row.instructor || '',
   };
 }
 
@@ -219,11 +240,12 @@ export function AppProvider({ children }) {
 
   async function refreshSupabasePortalData() {
     try {
-      const [usersRes, newsRes, clubsRes, reqRes] = await Promise.all([
+      const [usersRes, newsRes, clubsRes, reqRes, ttRes] = await Promise.all([
         supabase.from('portal_users').select('*'),
         supabase.from('portal_news').select('*'),
         supabase.from('portal_clubs').select('*'),
         supabase.from('portal_club_requests').select('*'),
+        supabase.from('portal_timetable').select('*'),
       ]);
 
       if (!usersRes.error && Array.isArray(usersRes.data) && usersRes.data.length > 0) {
@@ -242,6 +264,11 @@ export function AppProvider({ children }) {
       if (!reqRes.error && Array.isArray(reqRes.data)) {
         setClubRequests(reqRes.data.map(mapDbRequest));
       }
+
+      if (!ttRes.error && Array.isArray(ttRes.data) && ttRes.data.length > 0) {
+        setTimetable(ttRes.data.map(mapDbTimetable));
+        setBackendConnected(true);
+      }
     } catch {
       // الاحتفاظ بالبيانات الحالية عند عدم توفر الاتصال
     }
@@ -250,15 +277,12 @@ export function AppProvider({ children }) {
   async function refreshBackendData() {
     await refreshSupabasePortalData();
     try {
-      const [grList, sesList, ttList] = await Promise.all([
-        api.getGrades(),
-        api.getSessions(),
-        api.getTimetable(),
+      const [grList, sesList] = await Promise.all([
+        api.getGrades ? api.getGrades() : Promise.resolve(null),
+        api.getSessions ? api.getSessions() : Promise.resolve(null),
       ]);
-      setGrades(grList);
-      setSessions(sesList);
-      setTimetable(ttList);
-      setBackendConnected(true);
+      if (Array.isArray(grList) && grList.length > 0) setGrades(grList);
+      if (Array.isArray(sesList) && sesList.length > 0) setSessions(sesList);
     } catch {
       // يُبقي الحالة الحالية إذا لم يكن api الخارجي متاحاً
     }
@@ -271,12 +295,38 @@ export function AppProvider({ children }) {
   const t = TRANSLATIONS[language] || TRANSLATIONS.en;
   const isRTL = language === 'ar';
   const isAdmin = currentUser?.role === 'admin';
+  const isProf = currentUser?.role === 'prof';
+  const isClubAdmin = currentUser?.role === 'club_admin';
 
   function hasPermission(permission) {
     if (!currentUser) return false;
     if (currentUser.role === 'admin') return true;
+
+    if (
+      currentUser.role === 'prof' &&
+      [
+        'manage_assigned_grades',
+        'manage_assigned_formulas',
+        'manage_assigned_sessions',
+        'manage_assigned_timetable',
+      ].includes(permission)
+    ) {
+      return true;
+    }
+
     const perms = RBAC_PERMISSIONS[currentUser.role] || [];
     return perms.includes(permission);
+  }
+
+  function canManageClub(clubId) {
+    if (!currentUser) return false;
+    if (currentUser.role === 'admin') return true;
+    if (currentUser.role === 'club_admin') {
+      const managedId = currentUser.managedClubId ?? currentUser.managed_club_id;
+      if (!managedId) return true;
+      return String(managedId) === String(clubId);
+    }
+    return false;
   }
 
   function navigateTo(viewId) {
@@ -319,7 +369,7 @@ export function AppProvider({ children }) {
       // متابعة التحقق المحلي عند تعذر الاتصال
     }
 
-    // 2. التحقق من القائمة المحلية للحسابات (بما فيها admin و prof و student)
+    // 2. التحقق من القائمة المحلية للحسابات
     const localMatch = users.find(
       (u) => u.username.toLowerCase() === cleanUser && u.password === cleanPass
     );
@@ -335,18 +385,22 @@ export function AppProvider({ children }) {
 
     // 3. التحقق عبر api السابق كخيار احتياطي
     try {
-      const res = await api.login(username, password);
-      setCurrentUser(res.user);
-      setIsLoginModalOpen(false);
-      await refreshBackendData();
-      if (pendingViewAfterLogin) {
-        setActiveView(pendingViewAfterLogin);
-        setPendingViewAfterLogin(null);
+      if (typeof api.login === 'function') {
+        const res = await api.login(username, password);
+        setCurrentUser(res.user);
+        setIsLoginModalOpen(false);
+        await refreshBackendData();
+        if (pendingViewAfterLogin) {
+          setActiveView(pendingViewAfterLogin);
+          setPendingViewAfterLogin(null);
+        }
+        return { ok: true };
       }
-      return { ok: true };
     } catch (err) {
       return { ok: false, error: err.message || t.invalidCredentials || 'Invalid credentials' };
     }
+
+    return { ok: false, error: t.invalidCredentials || 'Invalid credentials' };
   }
 
   function logout() {
@@ -356,7 +410,7 @@ export function AppProvider({ children }) {
     }
   }
 
-  // إدارة جميع المستخدمين (Admin, Prof, Student)
+  // إدارة جميع المستخدمين (Admin, Club Admin, Prof, Student)
   async function addUserAccount(payload) {
     if (!isAdmin && !hasPermission('manage_student_accounts')) return;
     const newUser = {
@@ -369,6 +423,7 @@ export function AppProvider({ children }) {
       apogee: payload.apogee || '',
       filiere: payload.filiere || '',
       groupName: payload.groupName || '',
+      managedClubId: payload.managedClubId ?? payload.managed_club_id ?? '',
       status: payload.status || 'active',
     };
 
@@ -385,6 +440,7 @@ export function AppProvider({ children }) {
             apogee: newUser.apogee,
             filiere: newUser.filiere,
             group_name: newUser.groupName,
+            managed_club_id: newUser.managedClubId || null,
             status: newUser.status,
           },
         ])
@@ -414,6 +470,9 @@ export function AppProvider({ children }) {
     if (updates.apogee !== undefined) dbPayload.apogee = updates.apogee;
     if (updates.filiere !== undefined) dbPayload.filiere = updates.filiere;
     if (updates.groupName !== undefined) dbPayload.group_name = updates.groupName;
+    if (updates.managedClubId !== undefined || updates.managed_club_id !== undefined) {
+      dbPayload.managed_club_id = (updates.managedClubId ?? updates.managed_club_id) || null;
+    }
     if (updates.status !== undefined) dbPayload.status = updates.status;
 
     try {
@@ -429,7 +488,16 @@ export function AppProvider({ children }) {
           updates.password !== undefined && updates.password !== ''
             ? updates.password
             : u.password;
-        return { ...u, ...updates, password: nextPassword };
+        const nextClubId =
+          updates.managedClubId !== undefined || updates.managed_club_id !== undefined
+            ? updates.managedClubId ?? updates.managed_club_id ?? ''
+            : u.managedClubId;
+        return {
+          ...u,
+          ...updates,
+          password: nextPassword,
+          managedClubId: nextClubId,
+        };
       })
     );
 
@@ -441,6 +509,10 @@ export function AppProvider({ children }) {
           updates.password !== undefined && updates.password !== ''
             ? updates.password
             : prev.password,
+        managedClubId:
+          updates.managedClubId !== undefined || updates.managed_club_id !== undefined
+            ? updates.managedClubId ?? updates.managed_club_id ?? ''
+            : prev.managedClubId,
       }));
     }
   }
@@ -468,7 +540,6 @@ export function AppProvider({ children }) {
     setUsers((prev) => prev.filter((u) => u.id !== userId));
   }
 
-  // دوال توافقية للطلاب
   async function addStudent(payload) {
     await addUserAccount({ ...payload, role: 'student' });
   }
@@ -556,7 +627,7 @@ export function AppProvider({ children }) {
     setNews((prev) => prev.filter((item) => item.id !== newsId));
   }
 
-  // إدارة الأندية (إضافة - تعديل الاسم والوصف والمسؤول - حذف)
+  // إدارة الأندية (إضافة للأدمن + تعديل شامل للنادي للأدمن ومسؤول النادي)
   async function addClubItem(club) {
     if (!isAdmin) return;
     const entry = {
@@ -564,6 +635,10 @@ export function AppProvider({ children }) {
       name: club.name,
       description: club.description || '',
       leader: club.leader || currentUser?.fullName || 'Admin FSTBM',
+      members: Array.isArray(club.members) ? club.members : [],
+      events: Array.isArray(club.events) ? club.events : [],
+      announcements: Array.isArray(club.announcements) ? club.announcements : [],
+      photos: Array.isArray(club.photos) ? club.photos : [],
     };
 
     try {
@@ -580,7 +655,7 @@ export function AppProvider({ children }) {
         .single();
 
       if (!error && data) {
-        setClubs((prev) => [...prev, mapDbClub(data)]);
+        setClubs((prev) => [...prev, { ...mapDbClub(data), ...entry, id: data.id }]);
         return;
       }
     } catch {
@@ -591,7 +666,7 @@ export function AppProvider({ children }) {
   }
 
   async function updateClubItem(clubId, updates) {
-    if (!isAdmin) return;
+    if (!canManageClub(clubId)) return;
     try {
       await supabase
         .from('portal_clubs')
@@ -620,7 +695,7 @@ export function AppProvider({ children }) {
     setClubs((prev) => prev.filter((c) => c.id !== clubId));
   }
 
-  // طلبات الانضمام للأندية (إرسال طلب + قبول أو رفض من الأدمن)
+  // طلبات الانضمام للأندية (إرسال طلب + قبول أو رفض من الأدمن أو مسؤول النادي)
   async function submitClubJoinRequest(club, note = '') {
     const targetClub = typeof club === 'string' ? clubs.find((c) => c.id === club) : club;
     if (!targetClub) return;
@@ -667,7 +742,10 @@ export function AppProvider({ children }) {
   }
 
   async function decideClubJoinRequest(requestId, decision) {
-    if (!isAdmin) return;
+    const targetReq = clubRequests.find((r) => r.id === requestId);
+    const targetClubId = targetReq?.clubId ?? targetReq?.club_id;
+    if (!isAdmin && !canManageClub(targetClubId)) return;
+
     const nextStatus = decision === 'approved' ? 'approved' : 'rejected';
     try {
       await supabase
@@ -683,9 +761,16 @@ export function AppProvider({ children }) {
     );
   }
 
+  // إدارة نقط الامتحانات للأستاذ والأدمن
   async function updateGradeEntry(gradeId, updatedFields) {
     if (!hasPermission('manage_assigned_grades')) return;
-    await api.updateGrade(gradeId, updatedFields);
+    if (typeof api.updateGrade === 'function') {
+      try {
+        await api.updateGrade(gradeId, updatedFields);
+      } catch {
+        // متابعة التحديث المحلي
+      }
+    }
     setGrades((prev) =>
       prev.map((g) => (g.id === gradeId ? { ...g, ...updatedFields } : g))
     );
@@ -700,24 +785,145 @@ export function AppProvider({ children }) {
     );
   }
 
+  // إدارة الحصص (TD / TP) للأستاذ والأدمن
   async function addSession(newSession) {
     if (!hasPermission('manage_assigned_sessions')) return;
-    await api.createSession(newSession);
-    await refreshBackendData();
+    const created = {
+      id: `ses-${Date.now()}`,
+      status: 'scheduled',
+      ...newSession,
+    };
+
+    if (typeof api.createSession === 'function') {
+      try {
+        await api.createSession(created);
+      } catch {
+        // متابعة التحديث المحلي
+      }
+    }
+
+    setSessions((prev) => [created, ...prev]);
   }
 
   async function toggleSessionStatus(sessionId) {
     if (!hasPermission('manage_assigned_sessions')) return;
-    const res = await api.toggleSession(sessionId);
+    let nextStatus = 'completed';
     setSessions((prev) =>
-      prev.map((s) => (s.id === sessionId ? { ...s, status: res.status } : s))
+      prev.map((s) => {
+        if (s.id !== sessionId) return s;
+        nextStatus = s.status === 'scheduled' ? 'completed' : 'scheduled';
+        return { ...s, status: nextStatus };
+      })
+    );
+
+    if (typeof api.toggleSession === 'function') {
+      try {
+        await api.toggleSession(sessionId);
+      } catch {
+        // متابعة التحديث المحلي
+      }
+    }
+  }
+
+  // إدارة جدول الحصص (emploi du temps) للأستاذ والأدمن: إضافة - تعديل - حذف
+  async function addTimetableEntry(entry) {
+    if (!hasPermission('manage_assigned_timetable')) return;
+
+    const normalized = {
+      id: `tt-${Date.now()}`,
+      day: entry.day || 'Monday',
+      time: entry.time || '08:30 - 10:15',
+      moduleCode: entry.moduleCode || entry.module_code || 'INF301',
+      sessionType: entry.sessionType || entry.session_type || 'Cours',
+      room: entry.room || '',
+      group: entry.group || entry.group_name || '',
+      instructor: entry.instructor || currentUser?.fullName || '',
+    };
+
+    try {
+      const { data, error } = await supabase
+        .from('portal_timetable')
+        .insert([
+          {
+            day: normalized.day,
+            time: normalized.time,
+            module_code: normalized.moduleCode,
+            session_type: normalized.sessionType,
+            room: normalized.room,
+            group_name: normalized.group,
+            instructor: normalized.instructor,
+            updated_by: currentUser?.username || '',
+          },
+        ])
+        .select()
+        .single();
+
+      if (!error && data) {
+        setTimetable((prev) => [...prev, mapDbTimetable(data)]);
+        return;
+      }
+    } catch {
+      // fallback للحالة المحلية
+    }
+
+    if (typeof api.createTimetableEntry === 'function') {
+      try {
+        await api.createTimetableEntry(normalized);
+      } catch {
+        // متابعة التحديث المحلي
+      }
+    }
+
+    setTimetable((prev) => [...prev, normalized]);
+  }
+
+  async function updateTimetableEntry(entryId, updates) {
+    if (!hasPermission('manage_assigned_timetable')) return;
+
+    const nextModule = updates.moduleCode ?? updates.module_code;
+    const nextType = updates.sessionType ?? updates.session_type;
+    const nextGroup = updates.group ?? updates.group_name;
+
+    const dbUpdates = {};
+    if (updates.day !== undefined) dbUpdates.day = updates.day;
+    if (updates.time !== undefined) dbUpdates.time = updates.time;
+    if (nextModule !== undefined) dbUpdates.module_code = nextModule;
+    if (nextType !== undefined) dbUpdates.session_type = nextType;
+    if (updates.room !== undefined) dbUpdates.room = updates.room;
+    if (nextGroup !== undefined) dbUpdates.group_name = nextGroup;
+    if (updates.instructor !== undefined) dbUpdates.instructor = updates.instructor;
+    dbUpdates.updated_by = currentUser?.username || '';
+
+    try {
+      await supabase.from('portal_timetable').update(dbUpdates).eq('id', entryId);
+    } catch {
+      // fallback للحالة المحلية
+    }
+
+    setTimetable((prev) =>
+      prev.map((row) => {
+        if (row.id !== entryId) return row;
+        return {
+          ...row,
+          ...updates,
+          moduleCode: nextModule !== undefined ? nextModule : row.moduleCode,
+          sessionType: nextType !== undefined ? nextType : row.sessionType,
+          group: nextGroup !== undefined ? nextGroup : row.group,
+        };
+      })
     );
   }
 
-  async function addTimetableEntry(entry) {
+  async function deleteTimetableEntry(entryId) {
     if (!hasPermission('manage_assigned_timetable')) return;
-    await api.createTimetableEntry(entry);
-    await refreshBackendData();
+
+    try {
+      await supabase.from('portal_timetable').delete().eq('id', entryId);
+    } catch {
+      // fallback للحالة المحلية
+    }
+
+    setTimetable((prev) => prev.filter((row) => row.id !== entryId));
   }
 
   const value = {
@@ -728,6 +934,8 @@ export function AppProvider({ children }) {
     siteConfig,
     currentUser,
     isAdmin,
+    isProf,
+    isClubAdmin,
     activeView,
     setActiveView,
     navigateTo,
@@ -736,6 +944,7 @@ export function AppProvider({ children }) {
     login,
     logout,
     hasPermission,
+    canManageClub,
     users,
     students,
     modules,
@@ -770,6 +979,8 @@ export function AppProvider({ children }) {
     addSession,
     toggleSessionStatus,
     addTimetableEntry,
+    updateTimetableEntry,
+    deleteTimetableEntry,
   };
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
