@@ -13,7 +13,7 @@ import {
   INITIAL_NEWS,
   INITIAL_CLUBS,
   INITIAL_PHOTOS,
-} from '../data/initialData';
+} from '../data/database';
 import { api } from '../services/api';
 
 const AppContext = createContext(null);
