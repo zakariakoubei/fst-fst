@@ -30,6 +30,7 @@ const FALLBACK_USERS = [
     filiere: 'Administration',
     groupName: 'Staff',
     managedClubId: '',
+    assignedModules: [],
     status: 'active',
   },
   {
@@ -43,6 +44,7 @@ const FALLBACK_USERS = [
     filiere: 'MIP',
     groupName: 'G1',
     managedClubId: '',
+    assignedModules: [],
     status: 'active',
   },
   {
@@ -56,6 +58,7 @@ const FALLBACK_USERS = [
     filiere: 'MIP',
     groupName: 'G1',
     managedClubId: '',
+    assignedModules: [],
     status: 'active',
   },
 ];
@@ -125,7 +128,19 @@ const FALLBACK_TIMETABLE = [
   },
 ];
 
+function normalizeModulesList(raw) {
+  if (Array.isArray(raw)) {
+    return raw.map((m) => String(m).trim().toUpperCase()).filter(Boolean);
+  }
+  if (!raw) return [];
+  return String(raw)
+    .split(',')
+    .map((code) => code.trim().toUpperCase())
+    .filter(Boolean);
+}
+
 function mapDbUser(row) {
+  const assigned = normalizeModulesList(row.assigned_modules ?? row.assignedModules);
   return {
     id: row.id,
     username: row.username,
@@ -137,6 +152,7 @@ function mapDbUser(row) {
     filiere: row.filiere || '',
     groupName: row.group_name || row.groupName || '',
     managedClubId: row.managed_club_id || row.managedClubId || '',
+    assignedModules: assigned,
     status: row.status || 'active',
   };
 }
@@ -192,6 +208,18 @@ function mapDbTimetable(row) {
   };
 }
 
+function mapDbGrade(row) {
+  return {
+    id: row.id,
+    studentId: String(row.student_id ?? row.studentId ?? ''),
+    moduleCode: String(row.module_code ?? row.moduleCode ?? '').toUpperCase(),
+    exam: Number(row.exam ?? 0),
+    td: Number(row.td ?? 0),
+    tp: Number(row.tp ?? 0),
+    cc: Number(row.cc ?? 0),
+  };
+}
+
 export function AppProvider({ children }) {
   const [language, setLanguage] = useState(() => {
     return localStorage.getItem(STORAGE_KEYS.LANG) || INITIAL_SITE_CONFIG.defaultLanguage;
@@ -240,12 +268,13 @@ export function AppProvider({ children }) {
 
   async function refreshSupabasePortalData() {
     try {
-      const [usersRes, newsRes, clubsRes, reqRes, ttRes] = await Promise.all([
+      const [usersRes, newsRes, clubsRes, reqRes, ttRes, grRes] = await Promise.all([
         supabase.from('portal_users').select('*'),
         supabase.from('portal_news').select('*'),
         supabase.from('portal_clubs').select('*'),
         supabase.from('portal_club_requests').select('*'),
         supabase.from('portal_timetable').select('*'),
+        supabase.from('portal_grades').select('*'),
       ]);
 
       if (!usersRes.error && Array.isArray(usersRes.data) && usersRes.data.length > 0) {
@@ -268,6 +297,10 @@ export function AppProvider({ children }) {
       if (!ttRes.error && Array.isArray(ttRes.data) && ttRes.data.length > 0) {
         setTimetable(ttRes.data.map(mapDbTimetable));
         setBackendConnected(true);
+      }
+
+      if (!grRes.error && Array.isArray(grRes.data) && grRes.data.length > 0) {
+        setGrades(grRes.data.map(mapDbGrade));
       }
     } catch {
       // الاحتفاظ بالبيانات الحالية عند عدم توفر الاتصال
@@ -318,6 +351,17 @@ export function AppProvider({ children }) {
     return perms.includes(permission);
   }
 
+  function getAccessibleModules(user = currentUser) {
+    if (!user) return [];
+    if (user.role === 'admin') return modules;
+    if (user.role === 'prof') {
+      const assigned = normalizeModulesList(user.assignedModules ?? user.assigned_modules);
+      if (assigned.length === 0) return modules;
+      return modules.filter((m) => assigned.includes(String(m.code || '').toUpperCase()));
+    }
+    return modules;
+  }
+
   function canManageClub(clubId) {
     if (!currentUser) return false;
     if (currentUser.role === 'admin') return true;
@@ -343,7 +387,6 @@ export function AppProvider({ children }) {
     const cleanUser = String(username || '').trim().toLowerCase();
     const cleanPass = String(password || '');
 
-    // 1. التحقق أولاً من جدول portal_users في Supabase
     try {
       const { data, error } = await supabase
         .from('portal_users')
@@ -369,7 +412,6 @@ export function AppProvider({ children }) {
       // متابعة التحقق المحلي عند تعذر الاتصال
     }
 
-    // 2. التحقق من القائمة المحلية للحسابات
     const localMatch = users.find(
       (u) => u.username.toLowerCase() === cleanUser && u.password === cleanPass
     );
@@ -383,7 +425,6 @@ export function AppProvider({ children }) {
       return { ok: true };
     }
 
-    // 3. التحقق عبر api السابق كخيار احتياطي
     try {
       if (typeof api.login === 'function') {
         const res = await api.login(username, password);
@@ -413,6 +454,10 @@ export function AppProvider({ children }) {
   // إدارة جميع المستخدمين (Admin, Club Admin, Prof, Student)
   async function addUserAccount(payload) {
     if (!isAdmin && !hasPermission('manage_student_accounts')) return;
+    const assignedModules = normalizeModulesList(
+      payload.assignedModules ?? payload.assigned_modules
+    );
+
     const newUser = {
       id: `usr-${Date.now()}`,
       username: String(payload.username || '').trim(),
@@ -424,6 +469,7 @@ export function AppProvider({ children }) {
       filiere: payload.filiere || '',
       groupName: payload.groupName || '',
       managedClubId: payload.managedClubId ?? payload.managed_club_id ?? '',
+      assignedModules,
       status: payload.status || 'active',
     };
 
@@ -441,6 +487,7 @@ export function AppProvider({ children }) {
             filiere: newUser.filiere,
             group_name: newUser.groupName,
             managed_club_id: newUser.managedClubId || null,
+            assigned_modules: assignedModules.join(','),
             status: newUser.status,
           },
         ])
@@ -461,6 +508,12 @@ export function AppProvider({ children }) {
   async function updateUserAccount(userId, updates) {
     if (!isAdmin && !hasPermission('manage_student_accounts')) return;
 
+    const hasAssignedUpdate =
+      updates.assignedModules !== undefined || updates.assigned_modules !== undefined;
+    const parsedAssigned = hasAssignedUpdate
+      ? normalizeModulesList(updates.assignedModules ?? updates.assigned_modules)
+      : undefined;
+
     const dbPayload = {};
     if (updates.username !== undefined) dbPayload.username = updates.username;
     if (updates.password !== undefined && updates.password !== '') dbPayload.password = updates.password;
@@ -473,6 +526,9 @@ export function AppProvider({ children }) {
     if (updates.managedClubId !== undefined || updates.managed_club_id !== undefined) {
       dbPayload.managed_club_id = (updates.managedClubId ?? updates.managed_club_id) || null;
     }
+    if (hasAssignedUpdate) {
+      dbPayload.assigned_modules = parsedAssigned.join(',');
+    }
     if (updates.status !== undefined) dbPayload.status = updates.status;
 
     try {
@@ -483,7 +539,7 @@ export function AppProvider({ children }) {
 
     setUsers((prev) =>
       prev.map((u) => {
-        if (u.id !== userId) return u;
+        if (String(u.id) !== String(userId)) return u;
         const nextPassword =
           updates.password !== undefined && updates.password !== ''
             ? updates.password
@@ -497,11 +553,12 @@ export function AppProvider({ children }) {
           ...updates,
           password: nextPassword,
           managedClubId: nextClubId,
+          assignedModules: hasAssignedUpdate ? parsedAssigned : u.assignedModules || [],
         };
       })
     );
 
-    if (currentUser?.id === userId) {
+    if (currentUser && String(currentUser.id) === String(userId)) {
       setCurrentUser((prev) => ({
         ...prev,
         ...updates,
@@ -513,6 +570,7 @@ export function AppProvider({ children }) {
           updates.managedClubId !== undefined || updates.managed_club_id !== undefined
             ? updates.managedClubId ?? updates.managed_club_id ?? ''
             : prev.managedClubId,
+        assignedModules: hasAssignedUpdate ? parsedAssigned : prev.assignedModules || [],
       }));
     }
   }
@@ -537,7 +595,7 @@ export function AppProvider({ children }) {
     } catch {
       // fallback للحالة المحلية
     }
-    setUsers((prev) => prev.filter((u) => u.id !== userId));
+    setUsers((prev) => prev.filter((u) => String(u.id) !== String(userId)));
   }
 
   async function addStudent(payload) {
@@ -695,7 +753,7 @@ export function AppProvider({ children }) {
     setClubs((prev) => prev.filter((c) => c.id !== clubId));
   }
 
-  // طلبات الانضمام للأندية (إرسال طلب + قبول أو رفض من الأدمن أو مسؤول النادي)
+  // طلبات الانضمام للأندية
   async function submitClubJoinRequest(club, note = '') {
     const targetClub = typeof club === 'string' ? clubs.find((c) => c.id === club) : club;
     if (!targetClub) return;
@@ -761,19 +819,41 @@ export function AppProvider({ children }) {
     );
   }
 
-  // إدارة نقط الامتحانات للأستاذ والأدمن
+  // إدارة وتوليد نقط الامتحانات للأستاذ والأدمن
   async function updateGradeEntry(gradeId, updatedFields) {
     if (!hasPermission('manage_assigned_grades')) return;
-    if (typeof api.updateGrade === 'function') {
+
+    const exists = grades.some((g) => String(g.id) === String(gradeId));
+    const newRecordId = exists ? gradeId : `gr-${Date.now()}`;
+
+    if (exists && typeof api.updateGrade === 'function') {
       try {
         await api.updateGrade(gradeId, updatedFields);
       } catch {
         // متابعة التحديث المحلي
       }
     }
-    setGrades((prev) =>
-      prev.map((g) => (g.id === gradeId ? { ...g, ...updatedFields } : g))
-    );
+
+    setGrades((prev) => {
+      const found = prev.some((g) => String(g.id) === String(gradeId));
+      if (found) {
+        return prev.map((g) =>
+          String(g.id) === String(gradeId) ? { ...g, ...updatedFields } : g
+        );
+      }
+      return [
+        ...prev,
+        {
+          id: newRecordId,
+          studentId: String(updatedFields.studentId ?? ''),
+          moduleCode: String(updatedFields.moduleCode ?? '').toUpperCase(),
+          exam: Number(updatedFields.exam ?? 0),
+          td: Number(updatedFields.td ?? 0),
+          tp: Number(updatedFields.tp ?? 0),
+          cc: Number(updatedFields.cc ?? 0),
+        },
+      ];
+    });
   }
 
   function updateModuleFormula(moduleCode, nextFormula) {
@@ -807,11 +887,10 @@ export function AppProvider({ children }) {
 
   async function toggleSessionStatus(sessionId) {
     if (!hasPermission('manage_assigned_sessions')) return;
-    let nextStatus = 'completed';
     setSessions((prev) =>
       prev.map((s) => {
         if (s.id !== sessionId) return s;
-        nextStatus = s.status === 'scheduled' ? 'completed' : 'scheduled';
+        const nextStatus = s.status === 'scheduled' ? 'completed' : 'scheduled';
         return { ...s, status: nextStatus };
       })
     );
@@ -944,6 +1023,7 @@ export function AppProvider({ children }) {
     login,
     logout,
     hasPermission,
+    getAccessibleModules,
     canManageClub,
     users,
     students,

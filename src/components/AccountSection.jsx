@@ -48,6 +48,23 @@ function formatListInput(arr) {
   return arr.join('\n');
 }
 
+function parseModulesInput(raw) {
+  if (Array.isArray(raw)) {
+    return raw.map((m) => String(m).trim().toUpperCase()).filter(Boolean);
+  }
+  if (!raw) return [];
+  return String(raw)
+    .split(',')
+    .map((code) => code.trim().toUpperCase())
+    .filter(Boolean);
+}
+
+function formatModulesInput(val) {
+  if (Array.isArray(val)) return val.join(', ');
+  if (!val) return '';
+  return String(val);
+}
+
 export default function AccountSection() {
   const {
     t,
@@ -135,9 +152,10 @@ export default function AccountSection() {
     filiere: 'MIP',
     groupName: 'G1',
     managedClubId: '',
+    assignedModulesText: '',
   });
 
-  // حالة تعديل المستخدمين وكلمات المرور (للأدمن)
+  // حالة تعديل المستخدمين وكلمات المرور والمواد الخاصة بالأستاذ (للأدمن)
   const [userDrafts, setUserDrafts] = useState({});
 
   if (!currentUser) {
@@ -260,6 +278,7 @@ export default function AccountSection() {
         groupName: u.groupName || '',
         password: u.password || '',
         managedClubId: u.managedClubId ?? u.managed_club_id ?? '',
+        assignedModulesText: formatModulesInput(u.assignedModules ?? u.assigned_modules),
       }
     );
   }
@@ -278,6 +297,7 @@ export default function AccountSection() {
   function handleSaveUser(u) {
     if (!isAdmin) return;
     const draft = getDraftForUser(u);
+    const parsedModules = parseModulesInput(draft.assignedModulesText);
     updateUserAccount?.(u.id, {
       fullName: draft.fullName,
       username: draft.username,
@@ -288,6 +308,8 @@ export default function AccountSection() {
       password: draft.password,
       managedClubId: draft.managedClubId || null,
       managed_club_id: draft.managedClubId || null,
+      assignedModules: parsedModules,
+      assigned_modules: parsedModules.join(','),
     });
     if (draft.password) {
       changeUserPassword?.(u.id, draft.password);
@@ -297,11 +319,14 @@ export default function AccountSection() {
   function handleCreateUser(e) {
     e.preventDefault();
     if (!isAdmin || !newUserForm.username.trim() || !newUserForm.password.trim()) return;
+    const parsedModules = parseModulesInput(newUserForm.assignedModulesText);
     addUserAccount?.({
       ...newUserForm,
       fullName: newUserForm.fullName.trim() || newUserForm.username.trim(),
       managedClubId: newUserForm.managedClubId || null,
       managed_club_id: newUserForm.managedClubId || null,
+      assignedModules: parsedModules,
+      assigned_modules: parsedModules.join(','),
     });
     setNewUserForm({
       username: '',
@@ -313,6 +338,7 @@ export default function AccountSection() {
       filiere: 'MIP',
       groupName: 'G1',
       managedClubId: '',
+      assignedModulesText: '',
     });
   }
 
@@ -743,7 +769,7 @@ export default function AccountSection() {
 
           {isAdmin && activeTab === 'users' && (
             <div className="space-y-4">
-              <form onSubmit={handleCreateUser} className="grid gap-2.5 rounded-xl bg-slate-50 p-4 md:grid-cols-5">
+              <form onSubmit={handleCreateUser} className="grid gap-2.5 rounded-xl bg-slate-50 p-4 md:grid-cols-6">
                 <input
                   type="text"
                   placeholder="Full name"
@@ -789,7 +815,16 @@ export default function AccountSection() {
                     </option>
                   ))}
                 </select>
-                <div className="md:col-span-5">
+                <input
+                  type="text"
+                  placeholder="Prof modules (e.g. INF301, INF302)"
+                  value={newUserForm.assignedModulesText}
+                  onChange={(e) =>
+                    setNewUserForm((p) => ({ ...p, assignedModulesText: e.target.value }))
+                  }
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs"
+                />
+                <div className="md:col-span-6">
                   <button
                     type="submit"
                     className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-700 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-800"
@@ -806,7 +841,7 @@ export default function AccountSection() {
                   return (
                     <div
                       key={u.id ?? idx}
-                      className="grid gap-2 rounded-xl border border-slate-200 p-3.5 md:grid-cols-7 md:items-center"
+                      className="grid gap-2 rounded-xl border border-slate-200 p-3.5 md:grid-cols-8 md:items-center"
                     >
                       <input
                         type="text"
@@ -844,6 +879,13 @@ export default function AccountSection() {
                           </option>
                         ))}
                       </select>
+                      <input
+                        type="text"
+                        value={draft.assignedModulesText}
+                        onChange={(e) => setDraftField(u, 'assignedModulesText', e.target.value)}
+                        placeholder="Modules (INF301...)"
+                        className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs"
+                      />
                       <input
                         type="text"
                         value={draft.password}
