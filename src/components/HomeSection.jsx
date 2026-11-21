@@ -15,6 +15,22 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
+function pickText(value, language = 'en', fallback = '') {
+  if (!value) return fallback;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object') {
+    return (
+      value[language] ||
+      value.en ||
+      value.fr ||
+      value.ar ||
+      Object.values(value).find((v) => typeof v === 'string') ||
+      fallback
+    );
+  }
+  return String(value);
+}
+
 export default function HomeSection() {
   const {
     language,
@@ -30,6 +46,9 @@ export default function HomeSection() {
   } = useApp();
 
   const ArrowIcon = isRTL ? ArrowLeft : ArrowRight;
+  const safeNews = Array.isArray(news) ? news : [];
+  const safeClubs = Array.isArray(clubs) ? clubs : [];
+  const safeModules = Array.isArray(modules) ? modules : [];
 
   const quickCards = [
     { id: 'grades', title: t.examGrades, icon: Award, accent: 'bg-emerald-50 text-emerald-700' },
@@ -47,7 +66,7 @@ export default function HomeSection() {
       <section className="rounded-3xl border border-emerald-200/70 bg-gradient-to-br from-emerald-900 via-emerald-800 to-slate-900 p-6 text-white shadow-lg sm:p-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <span className="inline-flex items-center gap-2 rounded-full bg-white/15 px-3 py-1 text-xs font-medium text-emerald-100">
-            {siteConfig.academicYear} • {siteConfig.semester}
+            {siteConfig?.academicYear || ''} • {siteConfig?.semester || ''}
           </span>
           <span
             className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${
@@ -57,12 +76,12 @@ export default function HomeSection() {
             }`}
           >
             {backendConnected ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}
-            {backendConnected ? 'PostgreSQL API Connected' : 'Local Demo Mode'}
+            {backendConnected ? 'Supabase Connected' : 'Local Mode'}
           </span>
         </div>
 
         <h1 className="mt-4 text-2xl font-extrabold tracking-tight sm:text-3xl">
-          {siteConfig.universityName[language] || siteConfig.universityName.en}
+          {pickText(siteConfig?.universityName, language, 'FSTBM Portal')}
         </h1>
         <p className="mt-2 max-w-2xl text-sm text-emerald-100/90">
           {currentUser
@@ -72,15 +91,15 @@ export default function HomeSection() {
 
         <div className="mt-6 grid grid-cols-3 gap-3 sm:max-w-lg">
           <div className="rounded-2xl bg-white/10 p-3.5 backdrop-blur-xs">
-            <div className="text-xl font-bold">{modules.length}</div>
+            <div className="text-xl font-bold">{safeModules.length}</div>
             <div className="text-xs text-emerald-100/80">Modules</div>
           </div>
           <div className="rounded-2xl bg-white/10 p-3.5 backdrop-blur-xs">
-            <div className="text-xl font-bold">{clubs.length}</div>
+            <div className="text-xl font-bold">{safeClubs.length}</div>
             <div className="text-xs text-emerald-100/80">{t.universityClubs}</div>
           </div>
           <div className="rounded-2xl bg-white/10 p-3.5 backdrop-blur-xs">
-            <div className="text-xl font-bold">{siteConfig.passingGrade}/20</div>
+            <div className="text-xl font-bold">{siteConfig?.passingGrade ?? 12}/20</div>
             <div className="text-xs text-emerald-100/80">{t.validated}</div>
           </div>
         </div>
@@ -122,17 +141,22 @@ export default function HomeSection() {
           </button>
         </div>
         <div className="mt-4 grid gap-4 md:grid-cols-2">
-          {news.map((item) => (
-            <article key={item.id} className="rounded-xl border border-slate-100 bg-slate-50 p-4">
+          {safeNews.map((item, idx) => (
+            <article
+              key={item?.id ?? idx}
+              className="rounded-xl border border-slate-100 bg-slate-50 p-4"
+            >
               <div className="flex items-center justify-between text-xs text-slate-500">
-                <span className="font-semibold text-emerald-700">{item.category}</span>
-                <span>{item.date}</span>
+                <span className="font-semibold text-emerald-700">
+                  {item?.category || 'General'}
+                </span>
+                <span>{item?.date || ''}</span>
               </div>
               <h3 className="mt-1.5 text-sm font-bold text-slate-900">
-                {item.title[language] || item.title.en}
+                {pickText(item?.title, language, '')}
               </h3>
               <p className="mt-1 text-xs leading-relaxed text-slate-600">
-                {item.summary[language] || item.summary.en}
+                {pickText(item?.summary ?? item?.content, language, '')}
               </p>
             </article>
           ))}

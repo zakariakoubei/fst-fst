@@ -2,15 +2,36 @@ import React, { useState } from 'react';
 import { Newspaper } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
+function pickText(value, language = 'en', fallback = '') {
+  if (!value) return fallback;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object') {
+    return (
+      value[language] ||
+      value.en ||
+      value.fr ||
+      value.ar ||
+      Object.values(value).find((v) => typeof v === 'string') ||
+      fallback
+    );
+  }
+  return String(value);
+}
+
 export default function NewsSection() {
   const { language, t, news } = useApp();
   const [selectedCategory, setSelectedCategory] = useState('ALL');
 
-  const categories = ['ALL', ...new Set(news.map((item) => item.category))];
+  const safeNews = Array.isArray(news) ? news : [];
+  const categories = [
+    'ALL',
+    ...new Set(safeNews.map((item) => item?.category || 'General')),
+  ];
+
   const filteredNews =
     selectedCategory === 'ALL'
-      ? news
-      : news.filter((item) => item.category === selectedCategory);
+      ? safeNews
+      : safeNews.filter((item) => (item?.category || 'General') === selectedCategory);
 
   return (
     <div className="space-y-6">
@@ -46,23 +67,23 @@ export default function NewsSection() {
       </div>
 
       <div className="grid gap-5 md:grid-cols-2">
-        {filteredNews.map((item) => (
+        {filteredNews.map((item, idx) => (
           <article
-            key={item.id}
+            key={item?.id ?? idx}
             className="rounded-2xl border border-slate-200 bg-white p-6 shadow-xs transition hover:border-emerald-200"
           >
             <div className="flex items-center justify-between gap-2 text-xs">
               <span className="rounded-full bg-emerald-50 px-2.5 py-1 font-semibold text-emerald-700">
-                {item.category}
+                {item?.category || 'General'}
               </span>
-              <span className="text-slate-500">{item.date}</span>
+              <span className="text-slate-500">{item?.date || ''}</span>
             </div>
 
             <h2 className="mt-3 text-base font-bold text-slate-900">
-              {item.title[language] || item.title.en}
+              {pickText(item?.title, language, '')}
             </h2>
             <p className="mt-2 text-sm leading-relaxed text-slate-600">
-              {item.summary[language] || item.summary.en}
+              {pickText(item?.summary ?? item?.content, language, '')}
             </p>
           </article>
         ))}
