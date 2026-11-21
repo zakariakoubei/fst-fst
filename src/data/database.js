@@ -1,6 +1,6 @@
 export const DEMO_CREDENTIALS = [
-  { username: 'admin.chraibi', password: 'password123', roleLabel: 'Administrator' },
-  { username: 'prof.bennani', password: 'password123', roleLabel: 'Professor' },
+  { username: 'zakaria', password: 'Gkws5420', roleLabel: 'Administrator' },
+  { username: 'prof.heeba', password: 'heeeeba123', roleLabel: 'Professor' },
   { username: 'club.idrissi', password: 'password123', roleLabel: 'Club Manager' },
   { username: 'youssef.mansouri', password: 'password123', roleLabel: 'Student' },
 ];
