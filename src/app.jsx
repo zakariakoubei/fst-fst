@@ -7,10 +7,10 @@ import GradesSection from './components/GradesSection';
 import SessionsSection from './components/SessionsSection';
 import TimetableSection from './components/TimetableSection';
 import NewsSection from './components/NewsSection';
-import ClubsSection from './components/clubssection';
-import PhotosSection from './components/photossection';
-import AccountSection from './components/accountsection';
-import WorkspaceSection from './components/workspacesection';
+import ClubsSection from './components/ClubsSection';
+import PhotosSection from './components/PhotosSection';
+import AccountSection from './components/AccountSection';
+import WorkspaceSection from './components/WorkspaceSection';
 
 export default function App() {
   const { activeView, isRTL, siteConfig, language } = useApp();
